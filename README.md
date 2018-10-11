@@ -17,5 +17,8 @@ Tool for CSV/TSV dumping GitHub Issues and Pull Requests.
             Retrieve items since specified date (default "2018-09-04")
       -t    Use tab-separated output
 
-    $ GITHUBTOKEN=(...) ghdump -t -o golang -r go
+    $ GITHUBTOKEN=<token> ghdump -t -o golang -r go
+    ...
+
+    $ GITHUBPASSWORD=<password> ghdump -t -u <username> -o golang -r go
     ...

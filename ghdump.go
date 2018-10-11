@@ -14,7 +14,9 @@ import (
 	"golang.org/x/oauth2"
 )
 
-var GitHubEnvironmentVarName = "GITHUBTOKEN"
+var GitHubTokenEnvVarName = "GITHUBTOKEN"
+var GitHubPasswordEnvVarName = "GITHUBPASSWORD"
+
 var GoogleSheetDateFormat = "01/02/2006 15:04:07"
 var GitHubMaxItemsPerPage = 100
 var CmdFlagsSinceFormat = "2006-01-02"
@@ -23,6 +25,9 @@ var TypePullRequest = "Pull Request"
 var TypeIssue = "Issue"
 
 var CmdFlags = struct {
+	Username     string
+	Password     string
+	NoLogin      bool
 	TabSeparated bool
 	Organization string
 	Repository   string
@@ -33,13 +38,15 @@ func init() {
 	// By default we retrieve only last month
 	since := time.Now().AddDate(0, -1, 0).Format(CmdFlagsSinceFormat)
 
+	flag.StringVar(&CmdFlags.Username, "u", "", "GitHub username")
+	flag.BoolVar(&CmdFlags.NoLogin, "n", false, "Do not authenticate (could trigger API rate limits)")
 	flag.BoolVar(&CmdFlags.TabSeparated, "t", false, "Use tab-separated output")
-	flag.StringVar(&CmdFlags.Organization, "o", "golang", "GitHub Owner Name")
-	flag.StringVar(&CmdFlags.Repository, "r", "go", "GitHub Repository Name")
+	flag.StringVar(&CmdFlags.Organization, "o", "golang", "GitHub owner/organization name")
+	flag.StringVar(&CmdFlags.Repository, "r", "go", "GitHub repository name")
 	flag.StringVar(&CmdFlags.Since, "s", since, "Retrieve items since specified date")
 }
 
-func IterateIssues(client *github.Client, since time.Time, fn func(*github.Issue)) error {
+func iterateIssues(client *github.Client, since time.Time, fn func(*github.Issue)) error {
 	options := github.IssueListByRepoOptions{
 		Direction:   "desc",
 		Sort:        "created",
@@ -71,7 +78,7 @@ func IterateIssues(client *github.Client, since time.Time, fn func(*github.Issue
 	return nil
 }
 
-func IteratePullRequests(client *github.Client, since time.Time, fn func(*github.PullRequest)) error {
+func iteratePullRequests(client *github.Client, since time.Time, fn func(*github.PullRequest)) error {
 	options := github.PullRequestListOptions{
 		Direction:   "desc",
 		Sort:        "created",
@@ -103,31 +110,43 @@ func IteratePullRequests(client *github.Client, since time.Time, fn func(*github
 	return nil
 }
 
-func GoogleSheetHyperlink(value interface{}, link string) string {
+func googleSheetHyperlink(value interface{}, link string) string {
 	return fmt.Sprintf("=HYPERLINK(\"%s\", \"%v\")", link, value)
 }
 
-func GitHubHTTPClient() *http.Client {
-	token := os.Getenv(GitHubEnvironmentVarName)
+func gitHubHTTPClient() *http.Client {
+	token := os.Getenv(GitHubTokenEnvVarName)
 
-	if len(token) == 0 {
-		return nil
+	if len(token) > 0 {
+		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+		return oauth2.NewClient(context.Background(), ts)
 	}
 
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	if len(CmdFlags.Username) > 0 && len(CmdFlags.Password) > 0 {
+		ts := &http.Client{
+			Transport: &github.BasicAuthTransport{
+				Transport: &http.Transport{},
+				Username:  CmdFlags.Username,
+				Password:  CmdFlags.Password,
+			},
+		}
+		return ts
+	}
 
-	return oauth2.NewClient(context.Background(), ts)
+	return nil
 }
 
 func main() {
 	flag.Parse()
 
-	sinceDateTime, err := time.Parse(CmdFlagsSinceFormat, CmdFlags.Since)
-	if err != nil {
-		log.Fatal(err)
+	CmdFlags.Password = os.Getenv(GitHubPasswordEnvVarName)
+
+	httpClient := gitHubHTTPClient()
+	if httpClient == nil && CmdFlags.NoLogin == false {
+		log.Fatal("No authentication could trigger API rate limiting: use authentication or use the flag -n to force.")
 	}
 
-	client := github.NewClient(GitHubHTTPClient())
+	ghClient := github.NewClient(httpClient)
 
 	w := csv.NewWriter(os.Stdout)
 	defer w.Flush()
@@ -136,11 +155,16 @@ func main() {
 		w.Comma = '\t'
 	}
 
-	err = IterateIssues(client, sinceDateTime, func(i *github.Issue) {
+	sinceDateTime, err := time.Parse(CmdFlagsSinceFormat, CmdFlags.Since)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = iterateIssues(ghClient, sinceDateTime, func(i *github.Issue) {
 		w.Write([]string{
-			GoogleSheetHyperlink(*i.User.Login, *i.User.HTMLURL),
+			googleSheetHyperlink(*i.User.Login, *i.User.HTMLURL),
 			TypeIssue,
-			GoogleSheetHyperlink(*i.Number, *i.HTMLURL),
+			googleSheetHyperlink(*i.Number, *i.HTMLURL),
 			*i.Title,
 			i.CreatedAt.Format(GoogleSheetDateFormat),
 		})
@@ -150,11 +174,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	err = IteratePullRequests(client, sinceDateTime, func(p *github.PullRequest) {
+	err = iteratePullRequests(ghClient, sinceDateTime, func(p *github.PullRequest) {
 		w.Write([]string{
-			GoogleSheetHyperlink(*p.User.Login, *p.User.HTMLURL),
+			googleSheetHyperlink(*p.User.Login, *p.User.HTMLURL),
 			TypePullRequest,
-			GoogleSheetHyperlink(*p.Number, *p.HTMLURL),
+			googleSheetHyperlink(*p.Number, *p.HTMLURL),
 			*p.Title,
 			p.CreatedAt.Format(GoogleSheetDateFormat),
 		})
