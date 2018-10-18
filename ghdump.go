@@ -78,38 +78,6 @@ func iterateIssues(client *github.Client, since time.Time, fn func(*github.Issue
 	return nil
 }
 
-func iteratePullRequests(client *github.Client, since time.Time, fn func(*github.PullRequest)) error {
-	options := github.PullRequestListOptions{
-		Direction:   "desc",
-		Sort:        "created",
-		State:       "all",
-		ListOptions: github.ListOptions{PerPage: GitHubMaxItemsPerPage},
-	}
-
-	for {
-		pullrequests, response, err := client.PullRequests.List(context.Background(), CmdFlags.Organization, CmdFlags.Repository, &options)
-		if err != nil {
-			return err
-		}
-
-		for _, i := range pullrequests {
-			if i.CreatedAt.Before(since) {
-				return nil
-			}
-
-			fn(i)
-		}
-
-		if response.NextPage == 0 {
-			break
-		}
-
-		options.Page = response.NextPage
-	}
-
-	return nil
-}
-
 func googleSheetHyperlink(value interface{}, link string) string {
 	return fmt.Sprintf("=HYPERLINK(\"%s\", \"%v\")", link, value)
 }
@@ -161,26 +129,18 @@ func main() {
 	}
 
 	err = iterateIssues(ghClient, sinceDateTime, func(i *github.Issue) {
+		typeName := TypeIssue
+
+		if i.IsPullRequest() {
+			typeName = TypePullRequest
+		}
+
 		w.Write([]string{
 			googleSheetHyperlink(*i.User.Login, *i.User.HTMLURL),
-			TypeIssue,
+			typeName,
 			googleSheetHyperlink(*i.Number, *i.HTMLURL),
 			*i.Title,
 			i.CreatedAt.Format(GoogleSheetDateFormat),
-		})
-	})
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = iteratePullRequests(ghClient, sinceDateTime, func(p *github.PullRequest) {
-		w.Write([]string{
-			googleSheetHyperlink(*p.User.Login, *p.User.HTMLURL),
-			TypePullRequest,
-			googleSheetHyperlink(*p.Number, *p.HTMLURL),
-			*p.Title,
-			p.CreatedAt.Format(GoogleSheetDateFormat),
 		})
 	})
 
