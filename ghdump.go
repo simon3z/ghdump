@@ -46,7 +46,7 @@ func init() {
 	flag.StringVar(&CmdFlags.Since, "s", since, "Retrieve items since specified date")
 }
 
-func iterateIssues(client *github.Client, since time.Time, fn func(*github.Issue)) error {
+func iterateIssues(client *github.Client, since time.Time, fn func(*github.Issue) error) error {
 	options := github.IssueListByRepoOptions{
 		Direction:   "desc",
 		Sort:        "created",
@@ -65,7 +65,10 @@ func iterateIssues(client *github.Client, since time.Time, fn func(*github.Issue
 				return nil
 			}
 
-			fn(i)
+			err := fn(i)
+			if err != nil {
+				return err
+			}
 		}
 
 		if response.NextPage == 0 {
@@ -128,20 +131,22 @@ func main() {
 		log.Fatal(err)
 	}
 
-	err = iterateIssues(ghClient, sinceDateTime, func(i *github.Issue) {
+	err = iterateIssues(ghClient, sinceDateTime, func(i *github.Issue) error {
 		typeName := TypeIssue
 
 		if i.IsPullRequest() {
 			typeName = TypePullRequest
 		}
 
-		w.Write([]string{
+		err := w.Write([]string{
 			googleSheetHyperlink(*i.User.Login, *i.User.HTMLURL),
 			typeName,
 			googleSheetHyperlink(*i.Number, *i.HTMLURL),
 			*i.Title,
 			i.CreatedAt.Format(GoogleSheetDateFormat),
 		})
+
+		return err
 	})
 
 	if err != nil {
